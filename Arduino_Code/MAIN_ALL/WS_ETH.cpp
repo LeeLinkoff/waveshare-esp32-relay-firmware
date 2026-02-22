@@ -1,15 +1,18 @@
-#include "WS_ETH.h"
 #include <time.h>
 #include <sys/time.h>
 
-void testClient(const char *host, uint16_t port);
-void diagnosis();
-
+#include "config.h"
+#include "WS_ETH.h"
 
 static bool eth_connected = false;
 static bool ntp_ok = false;
 
 IPAddress ETH_ip;
+
+
+void testClient(const char *host, uint16_t port);
+void diagnosis();
+
 
 void printSystemTime()
 {
@@ -17,11 +20,11 @@ void printSystemTime()
     struct tm *t = gmtime(&now);
 
     if (!t) {
-        Serial.println("System time not available");
+        BLE_LOG("System time not available");
         return;
     }
 
-    Serial.printf(
+    BLE_LOG(
         "SYS: %04d-%02d-%02d %02d:%02d:%02d\n",
         t->tm_year + 1900,
         t->tm_mon + 1,
@@ -34,7 +37,7 @@ void printSystemTime()
 
 void printRTCTime()
 {
-   Serial.printf(
+   BLE_LOG(
   "RTC: %04d-%02d-%02d %02d:%02d:%02d\n",
   datetime.year,
   datetime.month,
@@ -101,34 +104,34 @@ This function exists to remove ambiguity:
 */
 void diagnosis()
 {
-    printf("Running network diagnostics...\r\n");
+    BLE_LOG("Running network diagnostics...\r\n");
 
     IPAddress ip = ETH.localIP();
-    printf("Current IP: %d.%d.%d.%d\n", ip[0], ip[1], ip[2], ip[3]);
+    BLE_LOG("Current IP: %d.%d.%d.%d\n", ip[0], ip[1], ip[2], ip[3]);
 
     // DNS test
     IPAddress testIP;
     if (Network.hostByName("pool.ntp.org", testIP)) {
-        printf("DNS OK: %d.%d.%d.%d\n", testIP[0], testIP[1], testIP[2], testIP[3]);
+        BLE_LOG("DNS OK: %d.%d.%d.%d\n", testIP[0], testIP[1], testIP[2], testIP[3]);
     } else {
-        printf("DNS FAILED\n");
+        BLE_LOG("DNS FAILED\n");
     }
 
     // TCP test
-    printf("Testing HTTP connectivity...\n");
+    BLE_LOG("Testing HTTP connectivity...\n");
     testClient("example.com", 80);
 
     // Deterministic SNTP test (NO configTime here)
-    printf("Testing system UTC (SNTP result)...\n");
+    BLE_LOG("Testing system UTC (SNTP result)...\n");
 
     time_t now = time(nullptr);
-    printf("System epoch=%ld\r\n", (long)now);
+    BLE_LOG("System epoch=%ld\r\n", (long)now);
 
     if (now > 1609459200) {
         struct tm utc;
         gmtime_r(&now, &utc);
 
-        printf("SNTP OK: %04d-%02d-%02d %02d:%02d:%02d UTC\r\n",
+        BLE_LOG("SNTP OK: %04d-%02d-%02d %02d:%02d:%02d UTC\r\n",
                utc.tm_year + 1900,
                utc.tm_mon + 1,
                utc.tm_mday,
@@ -136,7 +139,7 @@ void diagnosis()
                utc.tm_min,
                utc.tm_sec);
     } else {
-        printf("SNTP FAILED: system still at epoch %ld\r\n", (long)now);
+        BLE_LOG("SNTP FAILED: system still at epoch %ld\r\n", (long)now);
     }
 }
 
@@ -238,7 +241,7 @@ bool Acquisition_time(void)
 {
  static bool sntp_initialized = false;
 
-    Serial.printf("[NTP] Using native SNTP\n");
+    BLE_LOG("[NTP] Using native SNTP\n");
 
     setenv("TZ", "UTC0", 1);
     tzset();
@@ -255,11 +258,12 @@ bool Acquisition_time(void)
     while (millis() - start < timeoutMs)
     {
         time_t now = time(nullptr);
-        Serial.printf("[NTP] system epoch=%ld\r\n", (long)now);
+        BLE_LOG("[NTP] system epoch=%ld\r\n", (long)now);
 
         // Epoch sanity check: > 2021-01-01
-        if (now > 1609459200) {
-            Serial.println("[NTP] SUCCESS, system UTC created");
+        if (now > 1609459200)
+        {
+            BLE_LOG("[NTP] SUCCESS, system UTC created");
 
             // Write RTC from system UTC
             struct tm utc;
@@ -277,38 +281,43 @@ bool Acquisition_time(void)
             PCF85063_Set_All(t);
             datetime = t;
 
-            Serial.println("[RTC] Updated from system UTC");
+            BLE_LOG("[RTC] Updated from system UTC");
             return true;
         }
 
         delay(500);
     }
 
-    Serial.printf("[NTP] FAILURE: SNTP never set system time\r\n");
+    BLE_LOG("[NTP] FAILURE: SNTP never set system time\r\n");
     return false;
 }
 
 
-void testClient(const char *host, uint16_t port) {
-  printf("\nconnecting to \r\n");;
-  printf("%s\r\n",host);
+void testClient(const char *host, uint16_t port)
+{
+  BLE_LOG("\nconnecting to \r\n");;
+  BLE_LOG("%s\r\n",host);
 
   NetworkClient client;
-  if (!client.connect(host, port)) {
-    printf("connection failed\r\n");
+  
+  if (!client.connect(host, port))
+  {
+    BLE_LOG("connection failed\r\n");
     return;
   }
+
   client.printf("GET / HTTP/1.1\r\nHost: %s\r\n\r\n", host);
   while (client.connected() && !client.available());
   while (client.available()) {
-    printf("%c",(char)client.read());
+    BLE_LOG("%c",(char)client.read());
   }
 
-  printf("closing connection\n");
+  BLE_LOG("closing connection\n");
   client.stop();
 }
 
-void onEvent(arduino_event_id_t event, arduino_event_info_t info) {
+void onEvent(arduino_event_id_t event, arduino_event_info_t info)
+{
   switch (event) {
     case ARDUINO_EVENT_ETH_START:
       printf("ETH Started\r\n");
@@ -353,8 +362,9 @@ void onEvent(arduino_event_id_t event, arduino_event_info_t info) {
   }
 }
 
-void ETH_Init(void) {
-  printf("Ethernet Start\r\n");
+void ETH_Init(void)
+{
+  BLE_LOG("Ethernet Start\r\n");
   Network.onEvent(onEvent);
   SPI.begin(ETH_SPI_SCK, ETH_SPI_MISO, ETH_SPI_MOSI);
   ETH.begin(ETH_PHY_TYPE, ETH_PHY_ADDR, ETH_PHY_CS, ETH_PHY_IRQ, ETH_PHY_RST, SPI);

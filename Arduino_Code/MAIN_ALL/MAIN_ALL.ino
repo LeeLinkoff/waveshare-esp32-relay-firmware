@@ -1,9 +1,15 @@
 #include <Arduino.h>
 
 #include "esp_system.h"
+#include "esp_heap_caps.h"
 
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+#include "config.h"
 
 #include "WS_MQTT.h"
 #include "WS_Bluetooth.h"
@@ -11,23 +17,6 @@
 #include "WS_RTC.h"
 #include "WS_ETH.h"
 
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "esp_system.h"
-#include "esp_heap_caps.h"
-
-
-#ifndef WS_BLE_DEBUG
-#define WS_BLE_DEBUG 1
-#endif
-
-#if WS_BLE_DEBUG
-  #define BLE_LOG(...) Serial.printf(__VA_ARGS__)
-  #define BLE_LOG_FLUSH_REQUEST() requestSerialFlush()
-#else
-  #define BLE_LOG(...)
-  #define BLE_LOG_FLUSH_REQUEST()
-#endif
 
 static volatile bool g_flushRequested = false;
 
@@ -89,7 +78,7 @@ void RunInits()
   BLE_LOG("INIT RELAY");
   Relay_Init();
 
-  BLE_LOG("INIT RELAY");
+  BLE_LOG("INIT BLUETOOTH");
   Bluetooth_Init();
 }
 
