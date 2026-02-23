@@ -1,78 +1,111 @@
-# waveshare-esp32-relay-firmware
+# ESP32 BLE Time-Based Authentication – Proof of Concept (Waveshare Platform)
 
-A standalone ESP32 firmware implementation for Waveshare relay boards, derived from vendor example code and extended with authenticated BLE commands, controlled logging, and brownout-aware execution.
+## Read This First
 
----
+This repository is **not** a production firmware.
 
-## Key improvements
+It is a **proof of concept** demonstrating a **security pattern**, not an endorsement of the hardware, vendor SDK, or platform stability.
 
-### Authenticated BLE control
-Relay control over BLE is protected using an HMAC-based authentication scheme that binds each command to a short-lived UTC timestamp and relay channel identifier.
-
-The device verifies:
-- The system clock is valid and synchronized
-- The command timestamp is within a narrow acceptance window
-- The HMAC signature matches the expected value derived from the shared secret
-
-Commands that fail validation are rejected before any relay state is modified. This prevents replay attacks, stale commands, and unauthenticated control over BLE.
+The proof of concept is complete.
+Further development was intentionally abandoned due to **hardware instability and vendor-supplied code quality**.
 
 ---
 
-### Elimination of tight vendor busy-loops
-The original vendor firmware relies on infinite while(1) loops with fixed delays for tasks such as BLE status transmission.
+## What This Code Demonstrates (Successfully)
 
-These patterns:
-- Waste CPU time
-- Increase power draw
-- Starve other FreeRTOS tasks under load
-- Exacerbate brownout conditions on marginal power supplies
+This project demonstrates a **working security model**:
 
-In this firmware, long-running behavior is implemented using cooperative FreeRTOS tasks that explicitly yield via vTaskDelay, allowing the scheduler to operate deterministically.
+- Bluetooth Low Energy command authentication
+- Replay protection using UTC time
+- System time sourced from an external NTP server
+- Validation of BLE commands using:
+  - Channel
+  - UTC epoch
+  - HMAC
+- Authenticated dispatch to GPIO or downstream peripherals (relays, etc.)
 
----
+**This part works. Repeatedly and deterministically within the scope of the authentication protocol.**
 
-### Explicit task separation
-Time-sensitive and potentially blocking behaviors are separated into distinct tasks with defined responsibilities and priorities.
-
-Specifically:
-- BLE I/O and packet parsing
-- Relay actuation
-- Buzzer signaling
-- Status and telemetry transmission
-
-Direct hardware signaling inside BLE callbacks is kept minimal and non-blocking, with no delays or long-running operations executed in callback context.
----
-
-### Brownout-aware behavior
-The firmware does not attempt to disable ESP32 brownout detection in software.
-
-Instead, it is designed to behave predictably on boards with constrained or marginal power delivery by:
-- Avoiding burst activity during callbacks
-- Reducing simultaneous peripheral activation
-- Preventing tight CPU loops
-- Yielding cooperatively to the scheduler
-
-Brownout detection remains enabled so that power issues are surfaced rather than masked.
+The cryptographic and protocol logic is sound.
 
 ---
 
-### Deterministic logging
-Serial logging is gated and explicitly flushed outside of time-sensitive execution paths.
+## Why This Project Stops Here
 
-On ESP32-S3 devices using USB CDC, uncontrolled logging can:
-- Stall USB endpoints
-- Block internal mutexes
-- Trigger watchdog resets
+Development stopped **not because of the design**, but because of the **platform**.
 
-This firmware ensures that logging does not interfere with BLE handling, relay control, or system stability.
+### 1. Hardware Power Instability (Waveshare Board)
+
+The Waveshare ESP32 board used in this project exhibits:
+
+- Intermittent brownout resets
+- Spontaneous resets with no deterministic software trigger observable at the application level
+- Reset behavior that changes depending on:
+  - Ethernet state
+  - RTC writes
+  - BLE activity
+  - Timing of SNTP completion
+
+These resets occur **after successful boot**, **after successful NTP sync**, and **after correct RTC updates**.
+
+This is a **hardware / power-integrity problem**, not an application logic issue.
 
 ---
 
-## What this is not
+### 2. Fragile Vendor Ethernet + SNTP Stack
 
-This project is not:
-- A fork intended to track upstream Waveshare releases
-- A vendor-supported firmware replacement
-- A drop-in image guaranteed to work on all Waveshare relay board variants
+The vendor-supplied Ethernet integration is fragile and tightly coupled to execution context:
 
-It is a reference-quality, independently maintained firmware derived from publicly released Waveshare example code, intended for engineers who want full visibility into system behavior and explicit control over BLE, FreeRTOS, and hardware interactions.
+- SNTP behavior depends on where code runs (event callback vs loop)
+- Minor refactoring can break time acquisition
+- Blocking vs deferred execution changes system stability
+- Identical logic behaves differently depending on file placement
+
+This is **vendor stack fragility**, not misuse or misunderstanding of the APIs.
+
+---
+
+### 3. Unacceptable Reliability for Production Work
+
+Extending this project beyond a proof of concept would require:
+
+- Replacing vendor Ethernet code
+- Re-engineering power delivery
+- Deep FreeRTOS task isolation
+- Long-term soak testing to survive random resets
+
+None of that improves the **security model** being demonstrated.
+
+At that point, the work becomes **salvaging a broken platform**, not building a product.
+
+---
+
+## What This Project Explicitly Does NOT Claim
+
+This project does **not** claim:
+
+- That Waveshare ESP32 boards are production-ready
+- That the vendor Ethernet stack is stable
+- That this firmware can run unattended long-term
+- That this is suitable for industrial or commercial deployment
+
+If long-term unattended reliability is a requirement, this hardware and vendor stack are unsuitable.
+
+---
+
+## Final Assessment
+
+- The **BLE authentication design works**
+- The **time-based replay protection works**
+- The **cryptographic validation works**
+- The **platform does not**
+
+This repository exists to document a **security approach**, not to normalize or excuse unreliable hardware.
+
+---
+
+## Status
+
+**Frozen. Proof of concept complete.**
+
+No further effort will be spent compensating for Waveshare hardware instability or vendor SDK issues.

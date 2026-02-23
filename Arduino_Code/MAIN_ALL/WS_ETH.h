@@ -6,6 +6,10 @@
 #include "WS_GPIO.h"
 #include "WS_RTC.h"
 
+extern volatile bool g_need_ntp;
+void ETH_LoopTick();
+
+
 // Set this to 1 to enable dual Ethernet support
 #define USE_TWO_ETH_PORTS 0
 
@@ -31,7 +35,7 @@
     #define ETH1_PHY_IRQ  33
     #define ETH1_PHY_RST  18
   #endif
-  ETHClass ETH1(1);
+  extern ETHClass ETH1;
 #endif
 
 #define timezone 8        // china 

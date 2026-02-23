@@ -8,6 +8,13 @@ void GPIO_Init() {
   ledcAttach(GPIO_PIN_Buzzer, Frequency, Resolution);   
   Set_Dutyfactor(0);                //0~100  
 
+  // DISABLE RGB TASK ONLY
+  // NOTE:
+  // RGBTask is intentionally NOT created.
+  // Vendor RGBTask forcibly overwrites LED state every 50ms and turns it OFF
+  // when its internal queue is empty, making direct RGB_Light() control impossible.
+  // Relay and buzzer require GPIO_Init(), but RGB is controlled manually to avoid vendor task interference.
+  /*
   xTaskCreatePinnedToCore(
     RGBTask,    
     "RelayFailTask",   
@@ -17,6 +24,8 @@ void GPIO_Init() {
     NULL,                 
     0                   
   );
+  */
+
   xTaskCreatePinnedToCore(
     BuzzerTask,    
     "RelayFailTask",   

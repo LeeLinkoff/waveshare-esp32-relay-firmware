@@ -1,0 +1,19 @@
+# Visual Studio / VS Code
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Build outputs
+bin/
+obj/
+
+# Arduino build
+*.elf
+*.map
+*.hex
+
+# OS
+.DS_Store
+Thumbs.db

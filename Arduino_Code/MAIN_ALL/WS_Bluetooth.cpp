@@ -1,6 +1,3 @@
-#include <string>
-#include <cstring>
-
 #include "config.h"
 #include "WS_Bluetooth.h"
 
@@ -12,6 +9,16 @@ BLECharacteristic* pRxCharacteristic;
 const uint8_t SECRET_KEY[] = "key-fsa-relay";
 const size_t SECRET_LEN = sizeof(SECRET_KEY) - 1;
 
+
+static void formatUtcDatetime(char* out, size_t outLen)
+{
+    time_t now = time(nullptr);
+    struct tm tmUtc;
+    gmtime_r(&now, &tmUtc);
+
+    // Example: 2026-02-22 23:41:05 UTC
+    strftime(out, outLen, "%Y-%m-%d %H:%M:%S UTC", &tmUtc);
+}
 
 // ===== auth helpers =====
 
@@ -58,32 +65,6 @@ static bool normalizeAuthPayload(const uint8_t* in, size_t inLen, uint8_t* out17
   return false;
 }
 
-// ===== logging helpers (no Arduino String, binary safe) =====
-
-static void logBleFrame(const uint8_t* data, size_t len)
-{
-  BLE_LOG("\n=== BLE RX START ===\n");
-
-  BLE_LOG("Raw BLE len = %u\n", (unsigned)len);
-
-  if (data == nullptr) {
-    BLE_LOG("ERROR: rxData == nullptr\n");
-  }
-  else if (len == 0) {
-    BLE_LOG("ERROR: len == 0\n");
-  }
-  else if (len > 0)
-  {
-    BLE_LOG("Raw bytes: ");
-    for (size_t i = 0; i < len; i++) {
-      BLE_LOG("%02X ", data[i]);
-    }
-    BLE_LOG("\n");
-  }
-
-  BLE_LOG("=== BLE RX END ===\n");
-}
-
 // ===== dispatch helpers (all noise lives here) =====
 
 static void handleBle2Byte(const uint8_t* b)
@@ -94,21 +75,24 @@ static void handleBle2Byte(const uint8_t* b)
   // When Extension_Enable is true, forwards the selected frame over RS485
   // Used to control external (off-board) relay channels only
 
-  BLE_LOG("PATH: 2 byte command\n");
-  BLE_LOG("Bytes = %02X %02X\n", b[0], b[1]);
-  BLE_LOG("Extension_Enable = %s\n", Extension_Enable ? "TRUE" : "FALSE");
+  Serial.printf("PATH: 2 byte command\n");
+  Serial.printf("Bytes = %02X %02X\n", b[0], b[1]);
+  Serial.printf("Extension_Enable = %s\n", Extension_Enable ? "TRUE" : "FALSE");
 
-  if (!Extension_Enable) {
-    BLE_LOG("REJECT: Extension disabled\n");
+  if (!Extension_Enable)
+  {
+    Serial.printf("REJECT: Extension disabled\n");
     return;
   }
 
-  if (b[0] != 0x06) {
-    BLE_LOG("REJECT: opcode != 0x06 (got 0x%02X)\n", b[0]);
+  if (b[0] != 0x06)
+  {
+    Serial.printf("REJECT: opcode != 0x06 (got 0x%02X)\n", b[0]);
     return;
   }
 
-  BLE_LOG("ACCEPT: RS485 command (selector=0x%02X)\n", b[1]);
+  Serial.printf("ACCEPT: RS485 command (selector=0x%02X)\n", b[1]);
+
   RS485_Analysis((uint8_t*)b);
 }
 
@@ -136,37 +120,37 @@ static void handleBleRtc14(const uint8_t* b)
   // [12] Repetition mode
   // [13] 0xFF end
 
-  BLE_LOG("PATH: 14 byte RTC event\n");
-  BLE_LOG("RTC_Event_Enable = %s\n", RTC_Event_Enable ? "TRUE" : "FALSE");
+  Serial.printf("PATH: 14 byte RTC event\n");
+  Serial.printf("RTC_Event_Enable = %s\n", RTC_Event_Enable ? "TRUE" : "FALSE");
 
-  if (!RTC_Event_Enable) {
-   BLE_LOG("REJECT: RTC events disabled\n");
+  if (!RTC_Event_Enable)
+  {
+    Serial.printf("REJECT: RTC events disabled\n");
     return;
   }
 
-  BLE_LOG("ACCEPT: RTC event packet\n");
+  Serial.printf("ACCEPT: RTC event packet\n");
+
   BLE_Set_RTC_Event((uint8_t*)b);
 }
 
 static void handleBleAuth17or34(const uint8_t* raw, size_t rawLen, const uint8_t* SECRET_KEY, size_t SECRET_LEN)
 {
-  BLE_LOG("PATH: AUTH packet (rawLen=%u)\n", (unsigned)rawLen);
-
   uint8_t bin[17];
-  if (!normalizeAuthPayload(raw, rawLen, bin)) {
-    BLE_LOG("AUTH FAIL: normalizeAuthPayload failed\n");
+  if (!normalizeAuthPayload(raw, rawLen, bin))
+  {
+    Serial.printf("AUTH FAIL: normalizeAuthPayload failed\n");
     return;
   }
 
-  if (rawLen == 34) {
-    BLE_LOG("AUTH: decoded ASCII hex (34) to binary (17)\n");
-  } else {
-    BLE_LOG("AUTH: raw binary (17)\n");
+  if (rawLen == 34)
+  {
+    Serial.printf("AUTH: decoded ASCII hex (34) to binary (17)\n");
   }
-
-  BLE_LOG("AUTH bin[0..16]: ");
-  for (int i = 0; i < 17; i++) Serial.printf("%02X ", bin[i]);
-  BLE_LOG("\n");
+  else
+  {
+    Serial.printf("AUTH: raw binary (17)\n");
+  }
 
   const uint8_t channel = bin[0];
   const uint32_t epoch =
@@ -175,26 +159,24 @@ static void handleBleAuth17or34(const uint8_t* raw, size_t rawLen, const uint8_t
     ((uint32_t)bin[3] << 8)  |
      (uint32_t)bin[4];
 
-  BLE_LOG("Byte[0] Channel = %u\n", channel);
-  BLE_LOG("Byte[1..4] Epoch UTC = %u (0x%02X %02X %02X %02X)\n", (unsigned)epoch, bin[1], bin[2], bin[3], bin[4]);
+  Serial.printf("Byte[0] Channel = %u\n", channel);
+  Serial.printf("Byte[1..4] Epoch UTC = %u (0x%02X %02X %02X %02X)\n", (unsigned)epoch, bin[1], bin[2], bin[3], bin[4]);
 
-  BLE_LOG("Byte[5..16] HMAC recv(12) = ");
-  for (int i = 5; i < 17; i++) Serial.printf("%02X ", bin[i]);
-  BLE_LOG("\n");
-
-  if (!systemUtcIsValid()) {
-    BLE_LOG("AUTH FAIL: system UTC invalid (still 1970)\n");
+  if (!systemUtcIsValid())
+  {
+    Serial.printf("AUTH FAIL: system UTC invalid (still 1970)\n");
     return;
   }
 
   const uint32_t now = sysUtcSecondsNow();
   const uint32_t diff = (now > epoch) ? (now - epoch) : (epoch - now);
 
-  BLE_LOG("System UTC now = %u\n", (unsigned)now);
-  BLE_LOG("Epoch delta    = %u sec\n", (unsigned)diff);
+  Serial.printf("System UTC now = %u\n", (unsigned)now);
+  Serial.printf("Epoch delta    = %u sec\n", (unsigned)diff);
 
-  if (diff > 120) {
-    BLE_LOG("AUTH FAIL: epoch outside plus minus 120 sec\n");
+  if (diff > 120)
+  {
+    Serial.printf("AUTH FAIL: epoch outside plus minus 120 sec\n");
     return;
   }
 
@@ -202,45 +184,73 @@ static void handleBleAuth17or34(const uint8_t* raw, size_t rawLen, const uint8_t
   msg[0] = channel;
   memcpy(msg + 1, bin + 1, 4);
 
-  BLE_LOG("HMAC input msg(5) = ");
-  for (int i = 0; i < 5; i++) Serial.printf("%02X ", msg[i]);
-  BLE_LOG("\n");
-
+  // -------------------------------------------
   uint8_t fullMac[32];
 
   mbedtls_md_context_t ctx;
-  const mbedtls_md_info_t* info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
-
   mbedtls_md_init(&ctx);
-  mbedtls_md_setup(&ctx, info, 1);
-  mbedtls_md_hmac_starts(&ctx, SECRET_KEY, SECRET_LEN);
-  mbedtls_md_hmac_update(&ctx, msg, sizeof(msg));
-  mbedtls_md_hmac_finish(&ctx, fullMac);
-  mbedtls_md_free(&ctx);
 
-  BLE_LOG("HMAC calc first12 = ");
-  for (int i = 0; i < 12; i++) BLE_LOG("%02X ", fullMac[i]);
-  BLE_LOG("\n");
-
-  uint8_t mismatch = 0;
-  for (int i = 0; i < 12; i++) {
-    const uint8_t recv = bin[5 + i];
-    const uint8_t calc = fullMac[i];
-    const uint8_t x = (uint8_t)(calc ^ recv);
-    mismatch |= x;
-
-    BLE_LOG("HMAC[%02d]: calc=%02X recv=%02X xor=%02X\n", i, calc, recv, x);
-  }
-
-  if (mismatch != 0) {
-    BLE_LOG("AUTH FAIL: HMAC mismatch\n");
+  const mbedtls_md_info_t* info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+  if (info == nullptr)
+  {
+    Serial.printf("AUTH FAIL: SHA256 md_info NULL\n");
+    mbedtls_md_free(&ctx);
     return;
   }
 
-  BLE_LOG("AUTH OK\n");
+  int rc = 0;
+
+  rc = mbedtls_md_setup(&ctx, info, 1);
+  if (rc != 0)
+  {
+    Serial.printf("AUTH FAIL: md_setup rc=%d\n", rc);
+    mbedtls_md_free(&ctx);
+    return;
+  }
+
+  rc = mbedtls_md_hmac_starts(&ctx, SECRET_KEY, SECRET_LEN);
+  if (rc != 0)
+  {
+    Serial.printf("AUTH FAIL: hmac_starts rc=%d\n", rc);
+    mbedtls_md_free(&ctx);
+    return;
+  }
+
+  rc = mbedtls_md_hmac_update(&ctx, msg, sizeof(msg));
+  if (rc != 0)
+  {
+    Serial.printf("AUTH FAIL: hmac_update rc=%d\n", rc);
+    mbedtls_md_free(&ctx);
+    return;
+  }
+
+  rc = mbedtls_md_hmac_finish(&ctx, fullMac);
+  if (rc != 0)
+  {
+    Serial.printf("AUTH FAIL: hmac_finish rc=%d\n", rc);
+    mbedtls_md_free(&ctx);
+    return;
+  }
+
+  mbedtls_md_free(&ctx);
+  // ----------------------------------------------
+
+  uint8_t mismatch = 0;
+  for (int i = 0; i < 12; i++)
+  {
+    mismatch |= (uint8_t)(fullMac[i] ^ bin[5 + i]);
+  }
+
+  if (mismatch != 0)
+  {
+    Serial.printf("AUTH FAIL: HMAC mismatch\n");
+    return;
+  }
+
+  Serial.printf("AUTH OK\n");
 
   uint8_t cmd = (uint8_t)(channel + '0');
-  BLE_LOG("Dispatch relay: channel=%u ascii=0x%02X\n", channel, cmd);
+  Serial.printf("Dispatch relay: channel=%u ascii=0x%02X\n", channel, cmd);
   
   Relay_Analysis(&cmd, Bluetooth_Mode);
 }
@@ -255,22 +265,21 @@ class MyServerCallbacks : public BLEServerCallbacks
     // When the Device is connected, "Device connected" is printed.
     void onConnect(BLEServer* pServer)
     {                                        
-      BLE_LOG("Device connected"); 
+      Serial.printf("Device connected\n"); 
     }
 
     // "Device disconnected" will be printed when the device is disconnected
     void onDisconnect(BLEServer* pServer)
     {                                       
-      BLE_LOG("Device disconnected");
+      Serial.printf("Device disconnected\n");
 
-      BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();                 // Re-broadcast so that the device can query
-      pAdvertising->addServiceUUID(SERVICE_UUID);                                 // Re-broadcast so that the device can query
-      pAdvertising->setScanResponse(true);                                        // Re-broadcast so that the device can query
-      pAdvertising->setMinPreferred(0x06);                                        // Re-broadcast so that the device can query 
-      pAdvertising->setMinPreferred(0x12);                                        // Re-broadcast so that the device can query 
-      BLEDevice::startAdvertising();                                              // Re-broadcast so that the device can query 
-      pRxCharacteristic->notify();                                                // Re-broadcast so that the device can query  
-      pAdvertising->start();                                                      // Re-broadcast so that the device can query
+      BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+      pAdvertising->addServiceUUID(SERVICE_UUID);
+      pAdvertising->setScanResponse(true);
+      pAdvertising->setMinPreferred(0x06);
+      pAdvertising->setMinPreferred(0x12);
+      BLEDevice::startAdvertising();
+      pAdvertising->start();
     }
 };
 
@@ -292,30 +301,30 @@ class MyRXCallback : public BLECharacteristicCallbacks
     Buzzer_Open_Time(300, 150);
 
     // ---- RAW BLE PAYLOAD (binary safe, no String, no getValue) ----
-    const size_t len = pCharacteristic->getLength();
+    const size_t rxLen = pCharacteristic->getLength();
     const uint8_t* rxData = pCharacteristic->getData();
-
-    logBleFrame(rxData, len);
+    
+    Serial.printf("BLE onWrite fired, len=%u\n", (unsigned)pCharacteristic->getLength());
+    
+    if (!rxData || rxLen == 0) return;
 
     // ================= DISPATCH =================
-    if (len == 2)
+    if (rxLen == 2)
     {
       handleBle2Byte(rxData);
     }
-    else if (len == 14)
+    else if (rxLen == 14)
     {
       handleBleRtc14(rxData);
     }
-    else if (len == 17 || len == 34)
+    else if (rxLen == 17 || rxLen == 34)
     {
-      handleBleAuth17or34(rxData, len, SECRET_KEY, SECRET_LEN);
+      handleBleAuth17or34(rxData, rxLen, SECRET_KEY, SECRET_LEN);
     }
     else
     {
       Serial.printf("REJECT: unsupported payload length\n");
     }
-
-    pCharacteristic->setValue("");
   }
 };
 
@@ -348,33 +357,41 @@ void BLE_Set_RTC_Event(uint8_t* valueBytes)
  // Send data using Bluetooth
 void Bluetooth_SendData(char* Data)
 { 
-  if (Data != nullptr && strlen(Data) > 0) {
-    if (pServer->getConnectedCount() > 0) {
-      String SendValue = String(Data);  // Convert char* to String
-      pTxCharacteristic->setValue(SendValue);  // Set SendValue to the eigenvalue (String type)
-      pTxCharacteristic->notify();  // Sends a notification to all connected devices
-    }
-  }
+  // Use raw buffer instead of Arduino String to avoid heap allocation and fragmentation in long-running BLE task
+  if (!Data || !Data[0] || !pTxCharacteristic) return;
+
+  size_t n = strnlen(Data, 256);
+  if (n == 256) return;   // unterminated or too long → reject
+
+  pTxCharacteristic->setValue((uint8_t*)Data, n);
 }
 
 void Bluetooth_Init()
 {
-  /*************************************************************************
-  Bluetooth
-  *************************************************************************/
-  BLEDevice::init("ESP32-8-CHANNEL-RELAY");                                        // Initialize Bluetooth and start broadcasting                           
+  BLEDevice::init("ESP32-8-CHANNEL-RELAY");  // Initialize Bluetooth and start broadcasting                           
   pServer = BLEDevice::createServer();                                          
   pServer->setCallbacks(new MyServerCallbacks());                               
-  BLEService* pService = pServer->createService(SERVICE_UUID);                  
-  pTxCharacteristic = pService->createCharacteristic(
-                                    TX_CHARACTERISTIC_UUID,
-                                    BLECharacteristic:: PROPERTY_READ);         // The eigenvalues are readable and can be read by remote devices
+  BLEService* pService = pServer->createService(SERVICE_UUID);
+
+  pTxCharacteristic = pService->createCharacteristic(TX_CHARACTERISTIC_UUID, BLECharacteristic::PROPERTY_READ);
+  BLEDescriptor* txDesc = new BLEDescriptor(BLEUUID((uint16_t)0x2901));
+  txDesc->setValue("Relay Status Output");
+  pTxCharacteristic->addDescriptor(txDesc);
+  
   pRxCharacteristic = pService->createCharacteristic(
                                     RX_CHARACTERISTIC_UUID,
-                                    BLECharacteristic::PROPERTY_WRITE);         // The eigenvalues are writable and can be written to by remote devices
+                                    BLECharacteristic::PROPERTY_WRITE);
   pRxCharacteristic->setCallbacks(new MyRXCallback());
+  BLEDescriptor* rxDesc = new BLEDescriptor(BLEUUID((uint16_t)0x2901));
+  rxDesc->setValue("Relay Control Commands");
+  pRxCharacteristic->addDescriptor(rxDesc);
 
-  pRxCharacteristic->setValue("Successfully Connect To ESP32-S3-POE-ETH-8DI-8RO");      
+  char dt[32];
+  formatUtcDatetime(dt, sizeof(dt));
+  char msg[128];
+  snprintf(msg, sizeof(msg), "Successfully connected to ESP32-S3-POE-ETH-8DI-8RO on %s", dt);
+  pTxCharacteristic->setValue((uint8_t*)msg, strlen(msg));
+
   pService->start();   
 
   BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();                   
@@ -383,27 +400,5 @@ void Bluetooth_Init()
   pAdvertising->setMinPreferred(0x06);                                          
   pAdvertising->setMinPreferred(0x12);                                          
   BLEDevice::startAdvertising();                                                
-  pRxCharacteristic->notify();                                                    
   pAdvertising->start();
-
-  //RGB_Open_Time(0, 0, 60,1000, 0); 
-
-  xTaskCreatePinnedToCore(
-    BLETask,    
-    "BLETask",   
-    4096,                
-    NULL,                 
-    2,                   
-    NULL,                 
-    0                   
-  );
-}
-
-void BLETask(void *parameter)
-{
-  while(1){
-    Bluetooth_SendData(ipStr);
-    vTaskDelay(pdMS_TO_TICKS(500));
-  }
-  vTaskDelete(NULL);
 }

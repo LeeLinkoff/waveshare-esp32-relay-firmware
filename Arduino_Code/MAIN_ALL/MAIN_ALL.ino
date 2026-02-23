@@ -1,29 +1,19 @@
-#include <Arduino.h>
+#include <Arduino.h>              // Required
 
-#include "esp_system.h"
-#include "esp_heap_caps.h"
-
-#include "soc/soc.h"
-#include "soc/rtc_cntl_reg.h"
+#include "esp_system.h"           // esp_reset_reason()
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 #include "config.h"
 
-#include "WS_MQTT.h"
-#include "WS_Bluetooth.h"
-#include "WS_GPIO.h"
-#include "WS_RTC.h"
-#include "WS_ETH.h"
+#include "I2C_Driver.h"           // I2C_Init()
 
+#include "WS_GPIO.h"              // GPIO_Init(), Relay_Init(), RGB_Light()
+#include "WS_RTC.h"               // RTC_Init()
+#include "WS_ETH.h"               // ETH_Init(), ETH.macAddress()
+#include "WS_Bluetooth.h"         // Bluetooth_Init()
 
-static volatile bool g_flushRequested = false;
-
-
-void requestSerialFlush() {
-  g_flushRequested = true;
-}
 
 static const char* ResetReasonHuman(esp_reset_reason_t r)
 {
@@ -60,57 +50,42 @@ static const char* ResetReasonHuman(esp_reset_reason_t r)
 
 void RunInits()
 {
-  BLE_LOG("INIT GPIO");
+  Serial.printf("INIT GPIO\n");
   GPIO_Init();
 
-  BLE_LOG("INIT I2C");
+  Serial.printf("INIT I2C\n");
   I2C_Init();
 
-  BLE_LOG("INIT RTC");
+  Serial.printf("INIT RTC\n");
   RTC_Init();
 
-  BLE_LOG("INIT ETH");
+  Serial.printf("INIT ETH\n");
   ETH_Init();
 
-  BLE_LOG("INIT MQTT");
+  Serial.printf("INIT MQTT\n");
   MQTT_Init();
 
-  BLE_LOG("INIT RELAY");
+  Serial.printf("INIT RELAY\n");
   Relay_Init();
 
-  BLE_LOG("INIT BLUETOOTH");
+  Serial.printf("INIT BLUETOOTH\n");
   Bluetooth_Init();
-}
-
-void LedTask(void *param)
-{
-    // optional boot delay
-    vTaskDelay(pdMS_TO_TICKS(5000));
-
-    while (1)
-    {
-        // green blink, low current
-        RGB_Open_Time(0, 10, 0, 200, 800);
-
-        // sleep longer than on+off
-        vTaskDelay(pdMS_TO_TICKS(1000));
-    }
 }
 
 void printEthMAC() 
 {
    uint8_t mac[6];
    ETH.macAddress(mac);
-   BLE_LOG("ETH MAC: %02X:%02X:%02X:%02X:%02X:%02X\r\n", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+   Serial.printf("ETH MAC: %02X:%02X:%02X:%02X:%02X:%02X\n", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
 
 void printFreeRTOSInfo()
 {
-  BLE_LOG(F("\n=== FreeRTOS / ESP32 INFO ==="));
-  BLE_LOG("FreeRTOS tick rate : %d Hz\n", configTICK_RATE_HZ);
-  BLE_LOG("CPU cores          : %d\n", portNUM_PROCESSORS);
-  BLE_LOG("CPU frequency      : %lu MHz\n", (unsigned long)getCpuFrequencyMhz());
-  BLE_LOG(F("============================\n"));
+  Serial.printf("\n=== FreeRTOS / ESP32 INFO ===\n");
+  Serial.printf("FreeRTOS tick rate : %d Hz\n", configTICK_RATE_HZ);
+  Serial.printf("CPU cores          : %d\n", portNUM_PROCESSORS);
+  Serial.printf("CPU frequency      : %lu MHz\n", (unsigned long)getCpuFrequencyMhz());
+  Serial.printf("============================\n");
 }
 
 
@@ -162,36 +137,23 @@ void setup()
   Serial.begin(115200);
   delay(3000);   // give USB CDC time, but do not depend on it
 
-  BLE_LOG("RESET CAUSE: ");
-  BLE_LOG("%s\n", ResetReasonHuman(esp_reset_reason()));
+  Serial.printf("RESET CAUSE: ");
+  Serial.printf("%s\n", ResetReasonHuman(esp_reset_reason()));
 
   RunInits();
   Buzzer_Open_Time(500, 0);
  
-  BLE_LOG("Setting LED to blue");
-  // BLUE immediately, no delay
-  RGB_Open_Time(0, 0, 3, 3000, 0);
+  Serial.printf("Setting LED to blue\n");
+  RGB_Light(0, 0, 255);   // stays blue
+  delay(2000);   // 2 seconds of blue you can actually see
 
-  BLE_LOG("INITIAL BOOT OK!");
-
-  BLE_LOG("Setting LED to blinking green");
-  xTaskCreatePinnedToCore(
-    LedTask,
-    "LedTask",
-    2048,
-    NULL,
-    1,        // LOW priority
-    NULL,
-    0         // core 0 (safe)
-  );
-
-  BLE_LOG("FINAL BOOT OK!");
+  Serial.printf("INITIAL BOOT OK!\n");
 
   printFreeRTOSInfo();
-
   printEthMAC();
 
-  BLE_LOG_FLUSH_REQUEST();
+  Serial.printf("FINAL BOOT OK!\n");
+  Serial.printf("Setting LED to blinking green\n");
 }
 
 
@@ -200,9 +162,19 @@ void setup()
 /**********************************************************  While  **********************************************************/
 void loop()
 {
-  if (g_flushRequested) {
-    g_flushRequested = false;
-    Serial.flush();
-    vTaskDelay(pdMS_TO_TICKS(1));  // yield after flush
+  static uint32_t last = 0;
+  static bool on = false;
+
+  uint32_t now = millis();
+  if (now - last >= 500)
+  {
+    last = now;
+    on = !on;
+
+    if (on) {
+      RGB_Light(0, 255, 0);   // green
+    } else {
+      RGB_Light(0, 0, 0);     // off
+    }
   }
 }

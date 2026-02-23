@@ -4,8 +4,13 @@
 #include "config.h"
 #include "WS_ETH.h"
 
+
+#if USE_TWO_ETH_PORTS
+ETHClass ETH1(1);
+#endif
+
+
 static bool eth_connected = false;
-static bool ntp_ok = false;
 
 IPAddress ETH_ip;
 
@@ -13,39 +18,33 @@ IPAddress ETH_ip;
 void testClient(const char *host, uint16_t port);
 void diagnosis();
 
-
 void printSystemTime()
 {
-    time_t now = time(nullptr);
-    struct tm *t = gmtime(&now);
+  time_t now = time(nullptr);
+  struct tm t;
 
-    if (!t) {
-        BLE_LOG("System time not available");
-        return;
-    }
+  if (!gmtime_r(&now, &t))
+  {
+    Serial.printf("System time not available\n");
+    return;
+  }
 
-    BLE_LOG(
-        "SYS: %04d-%02d-%02d %02d:%02d:%02d\n",
-        t->tm_year + 1900,
-        t->tm_mon + 1,
-        t->tm_mday,
-        t->tm_hour,
-        t->tm_min,
-        t->tm_sec
-    );
+  Serial.printf("SYS: %04d-%02d-%02d %02d:%02d:%02d\n",
+                t.tm_year + 1900, t.tm_mon + 1, t.tm_mday,
+                t.tm_hour, t.tm_min, t.tm_sec);
 }
 
 void printRTCTime()
 {
-   BLE_LOG(
-  "RTC: %04d-%02d-%02d %02d:%02d:%02d\n",
-  datetime.year,
-  datetime.month,
-  datetime.day,
-  datetime.hour,
-  datetime.minute,
-  datetime.second
-);
+  Serial.printf(
+    "RTC: %04d-%02d-%02d %02d:%02d:%02d\n",
+    datetime.year,
+    datetime.month,
+    datetime.day,
+    datetime.hour,
+    datetime.minute,
+    datetime.second
+  );
 }
 
 /*
@@ -86,11 +85,8 @@ When NOT to use:
   - In production control paths
 
 Determinism:
-  - Fully deterministic
-  - No retries
-  - No race conditions
-  - No side effects
-  - Same inputs always produce the same outputs
+  This function is side-effect free and reports the current network and system
+  time state at the moment it is called; results reflect real-time conditions.
 
 Expected outcomes:
   - DNS fail → network resolution problem
@@ -104,42 +100,48 @@ This function exists to remove ambiguity:
 */
 void diagnosis()
 {
-    BLE_LOG("Running network diagnostics...\r\n");
+    Serial.printf("Running network diagnostics...\n");
 
     IPAddress ip = ETH.localIP();
-    BLE_LOG("Current IP: %d.%d.%d.%d\n", ip[0], ip[1], ip[2], ip[3]);
+    Serial.printf("Current IP: %d.%d.%d.%d\n", ip[0], ip[1], ip[2], ip[3]);
 
     // DNS test
     IPAddress testIP;
-    if (Network.hostByName("pool.ntp.org", testIP)) {
-        BLE_LOG("DNS OK: %d.%d.%d.%d\n", testIP[0], testIP[1], testIP[2], testIP[3]);
-    } else {
-        BLE_LOG("DNS FAILED\n");
+    if (Network.hostByName("pool.ntp.org", testIP))
+    {
+        Serial.printf("DNS OK: %d.%d.%d.%d\n", testIP[0], testIP[1], testIP[2], testIP[3]);
+    }
+    else
+    {
+        Serial.printf("DNS FAILED\n");
     }
 
     // TCP test
-    BLE_LOG("Testing HTTP connectivity...\n");
+    Serial.printf("Testing HTTP connectivity...\n");
     testClient("example.com", 80);
 
     // Deterministic SNTP test (NO configTime here)
-    BLE_LOG("Testing system UTC (SNTP result)...\n");
+    Serial.printf("Testing system UTC (SNTP result)...\n");
 
     time_t now = time(nullptr);
-    BLE_LOG("System epoch=%ld\r\n", (long)now);
+    Serial.printf("System epoch=%ld\r\n", (long)now);
 
-    if (now > 1609459200) {
+    if (now > 1609459200)
+    {
         struct tm utc;
         gmtime_r(&now, &utc);
 
-        BLE_LOG("SNTP OK: %04d-%02d-%02d %02d:%02d:%02d UTC\r\n",
+        Serial.printf("SNTP OK: %04d-%02d-%02d %02d:%02d:%02d UTC\r\n",
                utc.tm_year + 1900,
                utc.tm_mon + 1,
                utc.tm_mday,
                utc.tm_hour,
                utc.tm_min,
                utc.tm_sec);
-    } else {
-        BLE_LOG("SNTP FAILED: system still at epoch %ld\r\n", (long)now);
+    }
+    else
+    {
+        Serial.printf("SNTP FAILED: system still at epoch %ld\n", (long)now);
     }
 }
 
@@ -147,14 +149,15 @@ void diagnosis()
 Acquisition_time()
 
 Purpose:
-  Deterministically create a valid system UTC clock using the ESP32 native SNTP
-  subsystem, then mirror that time into the external RTC (PCF85063).
+  Create a valid system UTC clock using the ESP32 native SNTP subsystem,
+  then mirror that time into the external RTC (PCF85063) if SNTP succeeds
+  within a fixed timeout window.
 
 Design rules:
-  - SNTP is initialized exactly once (static guard).
+  - SNTP is initialized once via configTime(); timezone configuration is applied on each call.
   - The ESP32 system clock is the *only* source of truth.
   - The RTC is a mirror, never an authority.
-  - No retry storms, no hidden state, no implicit re-initialization.
+  - No retry storms and no implicit SNTP re-initialization beyond the initial configTime() call.
 
 What this function actually does:
 
@@ -164,7 +167,7 @@ What this function actually does:
 
   2. Starts SNTP only once:
         configTime(0,0,servers)
-     After that, the SNTP task runs asynchronously in the background.
+        SNTP runs asynchronously, but this function blocks while polling the system clock.
 
   3. Polls the system clock:
         time(nullptr)
@@ -186,7 +189,7 @@ What this function actually does:
 
 Determinism properties:
 
-  This function is deterministic in behavior:
+  Deterministic control flow with externally contingent outcome:
 
     Input:
       - Network availability
@@ -195,11 +198,11 @@ Determinism properties:
       - SNTP server responsiveness
 
     Output:
-      - TRUE  → system UTC is valid, RTC is synchronized
-      - FALSE → system UTC was never created
+      - TRUE  → system UTC became valid within the timeout and RTC was synchronized
+      - FALSE → system UTC did not become valid within the timeout (SNTP may still succeed later)
 
-  No partial success states.
-  No hidden retries.
+  No partial success is acted upon; only system time validity within the timeout is accepted.
+  No unbounded retries are performed by this function; polling is limited to a fixed timeout.
   No silent failure.
   No guessing.
 
@@ -228,7 +231,7 @@ Why this is correct:
   - Prevents race conditions
   - Prevents RTC corruption with invalid time
   - Makes NTP failure explicit instead of implicit
-  - Keeps security logic deterministic
+  - Keeps time acquisition behavior explicit and bounded by a fixed timeout.
 
 This function does NOT:
   - Retry forever
@@ -239,9 +242,9 @@ This function does NOT:
 */
 bool Acquisition_time(void)
 {
- static bool sntp_initialized = false;
+    static bool sntp_initialized = false;
 
-    BLE_LOG("[NTP] Using native SNTP\n");
+    Serial.printf("[NTP] Using native SNTP\n");
 
     setenv("TZ", "UTC0", 1);
     tzset();
@@ -258,12 +261,12 @@ bool Acquisition_time(void)
     while (millis() - start < timeoutMs)
     {
         time_t now = time(nullptr);
-        BLE_LOG("[NTP] system epoch=%ld\r\n", (long)now);
+        Serial.printf("[NTP] system epoch=%ld\n", (long)now);
 
         // Epoch sanity check: > 2021-01-01
         if (now > 1609459200)
         {
-            BLE_LOG("[NTP] SUCCESS, system UTC created");
+            Serial.printf("[NTP] SUCCESS, system UTC created\n");
 
             // Write RTC from system UTC
             struct tm utc;
@@ -281,38 +284,49 @@ bool Acquisition_time(void)
             PCF85063_Set_All(t);
             datetime = t;
 
-            BLE_LOG("[RTC] Updated from system UTC");
+            Serial.printf("[RTC] Updated from system UTC\n");
             return true;
         }
 
         delay(500);
     }
 
-    BLE_LOG("[NTP] FAILURE: SNTP never set system time\r\n");
+    Serial.printf("[NTP] FAILURE: SNTP never set system time\n");
     return false;
 }
 
-
 void testClient(const char *host, uint16_t port)
 {
-  BLE_LOG("\nconnecting to \r\n");;
-  BLE_LOG("%s\r\n",host);
+  Serial.printf("\nconnecting to %s\n", host);
 
   NetworkClient client;
   
   if (!client.connect(host, port))
   {
-    BLE_LOG("connection failed\r\n");
+    Serial.printf("connection failed\n");
     return;
   }
 
-  client.printf("GET / HTTP/1.1\r\nHost: %s\r\n\r\n", host);
-  while (client.connected() && !client.available());
-  while (client.available()) {
-    BLE_LOG("%c",(char)client.read());
+  client.printf("GET / HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", host);
+
+  uint32_t start = millis();
+  while (client.connected() && !client.available())
+  {
+    if (millis() - start > 3000)   // 3s timeout
+    {
+      Serial.printf("timeout waiting for response\n");
+      client.stop();
+      return;
+    }
+    delay(10);
   }
 
-  BLE_LOG("closing connection\n");
+  while (client.available())
+  {
+    Serial.printf("%c", (char)client.read());
+  }
+
+  Serial.printf("\nclosing connection\n");
   client.stop();
 }
 
@@ -320,42 +334,32 @@ void onEvent(arduino_event_id_t event, arduino_event_info_t info)
 {
   switch (event) {
     case ARDUINO_EVENT_ETH_START:
-      printf("ETH Started\r\n");
+      Serial.printf("ETH Started\n");
       //set eth hostname here
       ETH.setHostname("esp32-eth0");
       break;
     case ARDUINO_EVENT_ETH_CONNECTED: 
-      printf("ETH Connected\r\n");
+      Serial.printf("ETH Connected\n");
       break;
     case ARDUINO_EVENT_ETH_GOT_IP:
       ETH_ip = ETH.localIP();
       Serial.printf("[ETH GOT IP] %d.%d.%d.%d  epoch=%ld\n",
                      ETH_ip[0], ETH_ip[1], ETH_ip[2], ETH_ip[3],
                     (long)time(nullptr));
-
-      Serial.printf("[NTP] Starting Acquisition_time()\n");
-      ntp_ok = Acquisition_time();
-      Serial.printf("[NTP] Acquisition_time returned %s\n", ntp_ok ? "TRUE" : "FALSE");
-      Serial.printf("[NTP] System epoch after Acquisition=%ld\n",
-                    (long)time(nullptr));
-
-    if (ntp_ok) {
-        printSystemTime();
-        printRTCTime();
-    } else {
-        Serial.printf("NTP FAILED\r\n");
-    }
-    break;
+      Acquisition_time();
+      printRTCTime();
+      printSystemTime();
+      break;                    
     case ARDUINO_EVENT_ETH_LOST_IP:
-      printf("ETH Lost IP\r\n");
+      Serial.printf("ETH Lost IP\n");
       eth_connected = false;
       break;
     case ARDUINO_EVENT_ETH_DISCONNECTED:
-      printf("ETH Disconnected\r\n");
+      Serial.printf("ETH Disconnected\n");
       eth_connected = false;
       break;
     case ARDUINO_EVENT_ETH_STOP:
-      printf("ETH Stopped\r\n");
+      Serial.printf("ETH Stopped\n");
       eth_connected = false;
       break;
     default: break;
@@ -364,7 +368,7 @@ void onEvent(arduino_event_id_t event, arduino_event_info_t info)
 
 void ETH_Init(void)
 {
-  BLE_LOG("Ethernet Start\r\n");
+  Serial.printf("Ethernet Start\n");
   Network.onEvent(onEvent);
   SPI.begin(ETH_SPI_SCK, ETH_SPI_MISO, ETH_SPI_MOSI);
   ETH.begin(ETH_PHY_TYPE, ETH_PHY_ADDR, ETH_PHY_CS, ETH_PHY_IRQ, ETH_PHY_RST, SPI);
