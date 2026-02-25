@@ -1,5 +1,6 @@
-#include "config.h"
 #include "WS_Bluetooth.h"
+
+#include "common.h"
 
 
 BLEServer* pServer;                                                             // Used to represent a BLE server
@@ -75,9 +76,7 @@ static void handleBle2Byte(const uint8_t* b)
   // When Extension_Enable is true, forwards the selected frame over RS485
   // Used to control external (off-board) relay channels only
 
-  Serial.printf("PATH: 2 byte command\n");
-  Serial.printf("Bytes = %02X %02X\n", b[0], b[1]);
-  Serial.printf("Extension_Enable = %s\n", Extension_Enable ? "TRUE" : "FALSE");
+  Serial.printf("PATH: 2 byte command, Bytes = 0x%02X 0x%02X, Extension_Enable = %s \n", b[0], b[1], Extension_Enable ? "TRUE" : "FALSE");
 
   if (!Extension_Enable)
   {
@@ -120,8 +119,7 @@ static void handleBleRtc14(const uint8_t* b)
   // [12] Repetition mode
   // [13] 0xFF end
 
-  Serial.printf("PATH: 14 byte RTC event\n");
-  Serial.printf("RTC_Event_Enable = %s\n", RTC_Event_Enable ? "TRUE" : "FALSE");
+  Serial.printf("PATH: 14 byte RTC event, RTC_Event_Enable = %s\n", RTC_Event_Enable ? "TRUE" : "FALSE");
 
   if (!RTC_Event_Enable)
   {
@@ -137,6 +135,9 @@ static void handleBleRtc14(const uint8_t* b)
 static void handleBleAuth17or34(const uint8_t* raw, size_t rawLen, const uint8_t* SECRET_KEY, size_t SECRET_LEN)
 {
   uint8_t bin[17];
+
+  Serial.printf("STACK HWM at entry: %u\n", uxTaskGetStackHighWaterMark(NULL));
+
   if (!normalizeAuthPayload(raw, rawLen, bin))
   {
     Serial.printf("AUTH FAIL: normalizeAuthPayload failed\n");
@@ -145,12 +146,18 @@ static void handleBleAuth17or34(const uint8_t* raw, size_t rawLen, const uint8_t
 
   if (rawLen == 34)
   {
-    Serial.printf("AUTH: decoded ASCII hex (34) to binary (17)\n");
+    Serial.printf("AUTH: decoded ASCII hex (34) to binary (17) \n");
   }
   else
   {
-    Serial.printf("AUTH: raw binary (17)\n");
+    Serial.printf("AUTH: raw binary (17) \n");
   }
+
+  /*
+    * Byte 0 → channel (1 byte)
+    * Bytes 1–4 → epoch (4 bytes)
+    * Bytes 5-16 → Remaining bytes (HMAC first 12 bytes)
+  */
 
   const uint8_t channel = bin[0];
   const uint32_t epoch =
@@ -159,8 +166,12 @@ static void handleBleAuth17or34(const uint8_t* raw, size_t rawLen, const uint8_t
     ((uint32_t)bin[3] << 8)  |
      (uint32_t)bin[4];
 
-  Serial.printf("Byte[0] Channel = %u\n", channel);
-  Serial.printf("Byte[1..4] Epoch UTC = %u (0x%02X %02X %02X %02X)\n", (unsigned)epoch, bin[1], bin[2], bin[3], bin[4]);
+  Serial.printf("RX: Byte[0] Channel = %u, Byte[1..4] epoch = %u (0x%02X 0x%02X 0x%02X 0x%02X), Byte[5..16] HMAC = 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X\n", 
+                (unsigned)channel, (unsigned)epoch,
+                (unsigned)bin[1], (unsigned)bin[2], (unsigned)bin[3], (unsigned)bin[4],
+                (unsigned)bin[5], (unsigned)bin[6], (unsigned)bin[7], (unsigned)bin[8],
+                (unsigned)bin[9], (unsigned)bin[10], (unsigned)bin[11], (unsigned)bin[12],
+                (unsigned)bin[13], (unsigned)bin[14], (unsigned)bin[15], (unsigned)bin[16]);
 
   if (!systemUtcIsValid())
   {
@@ -171,8 +182,7 @@ static void handleBleAuth17or34(const uint8_t* raw, size_t rawLen, const uint8_t
   const uint32_t now = sysUtcSecondsNow();
   const uint32_t diff = (now > epoch) ? (now - epoch) : (epoch - now);
 
-  Serial.printf("System UTC now = %u\n", (unsigned)now);
-  Serial.printf("Epoch delta    = %u sec\n", (unsigned)diff);
+  Serial.printf("System UTC now = %u, Epoch delta = %u sec\n", (unsigned)now, (unsigned)diff);
 
   if (diff > 120)
   {
@@ -184,74 +194,72 @@ static void handleBleAuth17or34(const uint8_t* raw, size_t rawLen, const uint8_t
   msg[0] = channel;
   memcpy(msg + 1, bin + 1, 4);
 
+  Serial.printf("STACK before HMAC: %u\n", (unsigned)uxTaskGetStackHighWaterMark(NULL));
+
   // -------------------------------------------
   uint8_t fullMac[32];
 
-  mbedtls_md_context_t ctx;
-  mbedtls_md_init(&ctx);
-
   const mbedtls_md_info_t* info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+
   if (info == nullptr)
   {
     Serial.printf("AUTH FAIL: SHA256 md_info NULL\n");
-    mbedtls_md_free(&ctx);
     return;
   }
 
-  int rc = 0;
+  int rc = mbedtls_md_hmac(info, SECRET_KEY, SECRET_LEN, msg, sizeof(msg), fullMac);
 
-  rc = mbedtls_md_setup(&ctx, info, 1);
+  Serial.printf("STACK after HMAC: %u\n", (unsigned)uxTaskGetStackHighWaterMark(NULL));
+
   if (rc != 0)
   {
-    Serial.printf("AUTH FAIL: md_setup rc=%d\n", rc);
-    mbedtls_md_free(&ctx);
+    Serial.printf("AUTH FAIL: md_hmac rc=%d\n", rc);
+    char errbuf[64];
+    mbedtls_strerror(rc, errbuf, sizeof(errbuf));
+    Serial.printf("AUTH FAIL: md_hmac rc=%d (%s)\n", rc, errbuf);
     return;
   }
 
-  rc = mbedtls_md_hmac_starts(&ctx, SECRET_KEY, SECRET_LEN);
-  if (rc != 0)
-  {
-    Serial.printf("AUTH FAIL: hmac_starts rc=%d\n", rc);
-    mbedtls_md_free(&ctx);
-    return;
-  }
+  // The HMAC was not successfully computed.
+  // HMAC computed successfully (rc == 0) — does NOT imply authentication is valid
+  // 
+  // Example:
+  //
+  // Given:
+  //   SECRET_KEY = "key-fsa-relay"
+  //   channel = 1
+  //   epoch = 1739990000
+  //   msg = [0x01 0x67 0xB5 0xA2 0x30]
+  //
+  //   Epoch 1739990000 in hex: 0x67B5A230
+  //   So channel with epoch is: 01 67 B5 A2 30
+  //
+  // mbedtls_md_hmac(...) may return rc == 0 and produce:
+  //
+  //   fullMac = 9A 4F 12 7C 55 8D 21 90 AB 44 66 7F ...
+  //
+  // If incoming packet contains:
+  //   01 67 B5 A2 30 AA AA AA AA AA AA AA AA AA AA AA AA
+  //
+  // rc is STILL 0 (HMAC computed successfully),
+  // but memcmp(fullMac, bin+5, 12) will FAIL.
+  //
+  // rc == 0 means "HMAC calculated"
+  // It does NOT mean "authentication valid"
 
-  rc = mbedtls_md_hmac_update(&ctx, msg, sizeof(msg));
-  if (rc != 0)
+  // Compare first 12 bytes of computed HMAC with received MAC (bin[5..16])
+  if (memcmp(fullMac, bin + 5, 12) != 0)
   {
-    Serial.printf("AUTH FAIL: hmac_update rc=%d\n", rc);
-    mbedtls_md_free(&ctx);
-    return;
-  }
-
-  rc = mbedtls_md_hmac_finish(&ctx, fullMac);
-  if (rc != 0)
-  {
-    Serial.printf("AUTH FAIL: hmac_finish rc=%d\n", rc);
-    mbedtls_md_free(&ctx);
-    return;
-  }
-
-  mbedtls_md_free(&ctx);
-  // ----------------------------------------------
-
-  uint8_t mismatch = 0;
-  for (int i = 0; i < 12; i++)
-  {
-    mismatch |= (uint8_t)(fullMac[i] ^ bin[5 + i]);
-  }
-
-  if (mismatch != 0)
-  {
-    Serial.printf("AUTH FAIL: HMAC mismatch\n");
-    return;
+     Serial.printf("AUTH FAIL: HMAC mismatch\n");
+     return;
   }
 
   Serial.printf("AUTH OK\n");
 
   uint8_t cmd = (uint8_t)(channel + '0');
-  Serial.printf("Dispatch relay: channel=%u ascii=0x%02X\n", channel, cmd);
-  
+
+  Serial.printf("Dispatch relay: channel=%u ascii=0x%02X\n", (unsigned)channel, (unsigned)cmd);
+
   Relay_Analysis(&cmd, Bluetooth_Mode);
 }
 
@@ -272,14 +280,6 @@ class MyServerCallbacks : public BLEServerCallbacks
     void onDisconnect(BLEServer* pServer)
     {                                       
       Serial.printf("Device disconnected\n");
-
-      BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
-      pAdvertising->addServiceUUID(SERVICE_UUID);
-      pAdvertising->setScanResponse(true);
-      pAdvertising->setMinPreferred(0x06);
-      pAdvertising->setMinPreferred(0x12);
-      BLEDevice::startAdvertising();
-      pAdvertising->start();
     }
 };
 
@@ -289,11 +289,14 @@ class MyRXCallback : public BLECharacteristicCallbacks
   public:
   /*
      onWrite()
-     ├── logBleFrame()        (raw dump, always)
-     └── dispatch by length
-          ├── 2 bytes  → RS485 selector (external relays only)
-          ├── 14 bytes → legacy RTC scheduling
-          └── 17/34    → authenticated relay command (HMAC
+     ├── buzzer pulse
+     ├─ get raw pointer + length
+      ├─ ASCII debug dump (bounded)
+      ├─ dispatch by length:
+      │     2   → handleBle2Byte
+      │     14  → handleBleRtc14
+      │     17/34 → handleBleAuth17or34
+      │     else → reject
   */
   void onWrite(BLECharacteristic* pCharacteristic) override
   {
@@ -303,9 +306,17 @@ class MyRXCallback : public BLECharacteristicCallbacks
     // ---- RAW BLE PAYLOAD (binary safe, no String, no getValue) ----
     const size_t rxLen = pCharacteristic->getLength();
     const uint8_t* rxData = pCharacteristic->getData();
-    
-    Serial.printf("BLE onWrite fired, len=%u\n", (unsigned)pCharacteristic->getLength());
-    
+
+    Serial.printf("\nBLE on, Write fired, len=%u \n", pCharacteristic->getLength());
+  
+    // Print as ASCII safely (length-controlled)
+    size_t n = rxLen;
+    if (n > 64) n = 64;   // clamp to safe size
+    char tmp[65];
+    memcpy(tmp, rxData, n);
+    tmp[n] = '\0';
+    Serial.printf("ASCII: %s \n", tmp);
+
     if (!rxData || rxLen == 0) return;
 
     // ================= DISPATCH =================
@@ -368,7 +379,13 @@ void Bluetooth_SendData(char* Data)
 
 void Bluetooth_Init()
 {
+  Serial.println("Before BLE init:");
+  Serial.printf("Free heap: %u\n", ESP.getFreeHeap());
   BLEDevice::init("ESP32-8-CHANNEL-RELAY");  // Initialize Bluetooth and start broadcasting                           
+  Serial.println("After BLE init:");
+  Serial.printf("Free heap: %u\n", ESP.getFreeHeap());
+  Serial.println("\n");
+
   pServer = BLEDevice::createServer();                                          
   pServer->setCallbacks(new MyServerCallbacks());                               
   BLEService* pService = pServer->createService(SERVICE_UUID);

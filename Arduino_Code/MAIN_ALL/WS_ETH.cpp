@@ -1,7 +1,6 @@
 #include <time.h>
 #include <sys/time.h>
 
-#include "config.h"
 #include "WS_ETH.h"
 
 
@@ -9,8 +8,6 @@
 ETHClass ETH1(1);
 #endif
 
-
-static bool eth_connected = false;
 
 IPAddress ETH_ip;
 
@@ -352,15 +349,12 @@ void onEvent(arduino_event_id_t event, arduino_event_info_t info)
       break;                    
     case ARDUINO_EVENT_ETH_LOST_IP:
       Serial.printf("ETH Lost IP\n");
-      eth_connected = false;
       break;
     case ARDUINO_EVENT_ETH_DISCONNECTED:
       Serial.printf("ETH Disconnected\n");
-      eth_connected = false;
       break;
     case ARDUINO_EVENT_ETH_STOP:
       Serial.printf("ETH Stopped\n");
-      eth_connected = false;
       break;
     default: break;
   }

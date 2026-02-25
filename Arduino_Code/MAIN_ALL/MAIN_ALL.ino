@@ -1,11 +1,10 @@
 #include <Arduino.h>              // Required
 
+#include "esp_heap_caps.h"
 #include "esp_system.h"           // esp_reset_reason()
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-
-#include "config.h"
 
 #include "I2C_Driver.h"           // I2C_Init()
 
@@ -14,37 +13,40 @@
 #include "WS_ETH.h"               // ETH_Init(), ETH.macAddress()
 #include "WS_Bluetooth.h"         // Bluetooth_Init()
 
+#include "common.h"
+
+
+
+
+
+void printHeapStats()
+{
+    Serial.printf("Free heap: %u\n", heap_caps_get_free_size(MALLOC_CAP_8BIT));
+    Serial.printf("Largest free block: %u bytes\n", heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+    Serial.printf("Min ever free heap: %u\n", ESP.getMinFreeHeap());
+}
 
 static const char* ResetReasonHuman(esp_reset_reason_t r)
 {
-  switch (r) {
-
-    case ESP_RST_POWERON:
-      return "Power was applied or restored (normal power-on)";
-
-    case ESP_RST_EXT:
-      return "External reset pin triggered (EN or RESET pin)";
-
-    case ESP_RST_SW:
-      return "Software requested a reboot (esp_restart or abort)";
-
-    case ESP_RST_PANIC:
-      return "Fatal crash (assert, abort, or unhandled exception)";
-
-    case ESP_RST_INT_WDT:
-      return "CPU watchdog fired (interrupts blocked too long)";
-
-    case ESP_RST_TASK_WDT:
-      return "Task watchdog fired (a task stalled or starved the scheduler)";
-
-    case ESP_RST_WDT:
-      return "System watchdog fired (system services stopped running)";
-
-    case ESP_RST_BROWNOUT:
-      return "Power dip or voltage drop (insufficient supply or relay surge)";
-
-    default:
-      return "Unknown reset reason";
+  switch (r)
+  {
+    case ESP_RST_UNKNOWN:     return "Reset reason cannot be determined";
+    case ESP_RST_POWERON:     return "Power-on reset";
+    case ESP_RST_EXT:         return "External reset pin";
+    case ESP_RST_SW:          return "Software reset (esp_restart)";
+    case ESP_RST_PANIC:       return "Panic reset (exception or abort)";
+    case ESP_RST_INT_WDT:     return "Interrupt watchdog reset";
+    case ESP_RST_TASK_WDT:    return "Task watchdog reset";
+    case ESP_RST_WDT:         return "Other watchdog reset";
+    case ESP_RST_DEEPSLEEP:   return "Wake from deep sleep";
+    case ESP_RST_BROWNOUT:    return "Brownout reset (voltage drop)";
+    case ESP_RST_SDIO:        return "SDIO reset";
+    case ESP_RST_USB:         return "USB reset";
+    case ESP_RST_JTAG:        return "JTAG reset";
+    case ESP_RST_EFUSE:       return "eFuse error reset";
+    case ESP_RST_PWR_GLITCH:  return "Power glitch reset";
+    case ESP_RST_CPU_LOCKUP:  return "CPU lockup (double exception)";
+    default:                  return "Unmapped reset reason";
   }
 }
 
@@ -61,9 +63,6 @@ void RunInits()
 
   Serial.printf("INIT ETH\n");
   ETH_Init();
-
-  Serial.printf("INIT MQTT\n");
-  MQTT_Init();
 
   Serial.printf("INIT RELAY\n");
   Relay_Init();
@@ -137,8 +136,8 @@ void setup()
   Serial.begin(115200);
   delay(3000);   // give USB CDC time, but do not depend on it
 
-  Serial.printf("RESET CAUSE: ");
-  Serial.printf("%s\n", ResetReasonHuman(esp_reset_reason()));
+   esp_reset_reason_t rr = esp_reset_reason();
+  Serial.printf("RESET CAUSE: %s (code=%d)\n", ResetReasonHuman(rr), (int)rr);
 
   RunInits();
   Buzzer_Open_Time(500, 0);
@@ -151,6 +150,7 @@ void setup()
 
   printFreeRTOSInfo();
   printEthMAC();
+  printHeapStats();
 
   Serial.printf("FINAL BOOT OK!\n");
   Serial.printf("Setting LED to blinking green\n");
