@@ -327,6 +327,28 @@ void testClient(const char *host, uint16_t port)
   client.stop();
 }
 
+/*
+ * Event handler invoked by the Arduino networking framework.
+ *
+ * Call path when an Ethernet cable is plugged in:
+ *
+ *   PHY hardware detects link-up
+ *        ↓
+ *   ESP-IDF Ethernet driver reads PHY status (periodic link check)
+ *        ↓
+ *   Driver posts event: esp_event_post(ETH_EVENT, ETHERNET_EVENT_CONNECTED)
+ *        ↓
+ *   ESP-IDF event loop dispatches the event
+ *        ↓
+ *   Arduino core event bridge converts it to ARDUINO_EVENT_ETH_CONNECTED
+ *        ↓
+ *   Registered Arduino callback is invoked → this function runs
+ *
+ * Similar flow occurs for:
+ *   ARDUINO_EVENT_ETH_DISCONNECTED
+ *   ARDUINO_EVENT_ETH_GOT_IP
+ *   etc.
+ */
 void onEvent(arduino_event_id_t event, arduino_event_info_t info)
 {
   switch (event) {
