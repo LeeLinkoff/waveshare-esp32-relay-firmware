@@ -15,6 +15,7 @@ IPAddress ETH_ip;
 void testClient(const char *host, uint16_t port);
 void diagnosis();
 
+
 void printSystemTime()
 {
   time_t now = time(nullptr);
@@ -43,6 +44,7 @@ void printRTCTime()
     datetime.second
   );
 }
+
 
 /*
 diagnosis()
@@ -326,6 +328,7 @@ void testClient(const char *host, uint16_t port)
   Serial.printf("\nclosing connection\n");
   client.stop();
 }
+
 
 /*
  * Event handler invoked by the Arduino networking framework.

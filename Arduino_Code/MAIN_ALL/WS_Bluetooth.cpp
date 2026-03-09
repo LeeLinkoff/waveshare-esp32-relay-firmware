@@ -3,15 +3,20 @@
 #include "common.h"
 
 
-BLEServer* pServer;                                                             // Used to represent a BLE server
-BLECharacteristic* pTxCharacteristic;
-BLECharacteristic* pRxCharacteristic;
+BLEServer* pServer;                                                             // used to represent a BLE server
+BLECharacteristic* pLastConnectTimeCharacteristic;                              // characteristic to record last time a Bluetooth device connected to waveshare relay
+BLECharacteristic* pRelayControlCharacteristic;                                 // characteristic that external Bluetooth device sends command to waveshare relay
+
 
 const uint8_t SECRET_KEY[] = "key-fsa-relay";
 const size_t SECRET_LEN = sizeof(SECRET_KEY) - 1;
 
 
-static void formatUtcDatetime(char* out, size_t outLen)
+
+
+// ===== auth helpers =====
+
+void formatUtcDatetime(char* out, size_t outLen)
 {
     time_t now = time(nullptr);
     struct tm tmUtc;
@@ -20,8 +25,6 @@ static void formatUtcDatetime(char* out, size_t outLen)
     // Example: 2026-02-22 23:41:05 UTC
     strftime(out, outLen, "%Y-%m-%d %H:%M:%S UTC", &tmUtc);
 }
-
-// ===== auth helpers =====
 
 static bool systemUtcIsValid()
 {
@@ -272,8 +275,19 @@ class MyServerCallbacks : public BLEServerCallbacks
     
     // When the Device is connected, "Device connected" is printed.
     void onConnect(BLEServer* pServer)
-    {                                        
-      Serial.printf("Device connected\n"); 
+    {
+      Serial.printf("Device connected\n");
+
+      char dt[32];
+      formatUtcDatetime(dt, sizeof(dt));
+
+      // Keep buffer version for BLE characteristic
+      char msg[128];
+      snprintf(msg, sizeof(msg), "Successfully connected to ESP32-S3-POE-ETH-8DI-8RO on %s", dt);
+      pLastConnectTimeCharacteristic->setValue((uint8_t*)msg, strlen(msg));
+
+            // Print directly to Serial without intermediate buffer
+      Serial.printf("Wrote 'Successfully connected to ESP32-S3-POE-ETH-8DI-8RO on %s' as a Bluetooth characteristic for this device\n", dt);
     }
 
     // "Device disconnected" will be printed when the device is disconnected
@@ -289,14 +303,14 @@ class MyRXCallback : public BLECharacteristicCallbacks
   public:
   /*
      onWrite()
-     ├── buzzer pulse
+     ├─ buzzer pulse
      ├─ get raw pointer + length
-      ├─ ASCII debug dump (bounded)
-      ├─ dispatch by length:
-      │     2   → handleBle2Byte
-      │     14  → handleBleRtc14
-      │     17/34 → handleBleAuth17or34
-      │     else → reject
+     ├─ ASCII debug dump (bounded)
+     ├─ dispatch by length:
+     │     2   → handleBle2Byte
+     │     14  → handleBleRtc14
+     │     17/34 → handleBleAuth17or34
+     │     else → reject
   */
   void onWrite(BLECharacteristic* pCharacteristic) override
   {
@@ -365,17 +379,6 @@ void BLE_Set_RTC_Event(uint8_t* valueBytes)
   }
 }
 
- // Send data using Bluetooth
-void Bluetooth_SendData(char* Data)
-{ 
-  // Use raw buffer instead of Arduino String to avoid heap allocation and fragmentation in long-running BLE task
-  if (!Data || !Data[0] || !pTxCharacteristic) return;
-
-  size_t n = strnlen(Data, 256);
-  if (n == 256) return;   // unterminated or too long → reject
-
-  pTxCharacteristic->setValue((uint8_t*)Data, n);
-}
 
 void Bluetooth_Init()
 {
@@ -390,24 +393,16 @@ void Bluetooth_Init()
   pServer->setCallbacks(new MyServerCallbacks());                               
   BLEService* pService = pServer->createService(SERVICE_UUID);
 
-  pTxCharacteristic = pService->createCharacteristic(TX_CHARACTERISTIC_UUID, BLECharacteristic::PROPERTY_READ);
-  BLEDescriptor* txDesc = new BLEDescriptor(BLEUUID((uint16_t)0x2901));
-  txDesc->setValue("Relay Status Output");
-  pTxCharacteristic->addDescriptor(txDesc);
-  
-  pRxCharacteristic = pService->createCharacteristic(
-                                    RX_CHARACTERISTIC_UUID,
-                                    BLECharacteristic::PROPERTY_WRITE);
-  pRxCharacteristic->setCallbacks(new MyRXCallback());
-  BLEDescriptor* rxDesc = new BLEDescriptor(BLEUUID((uint16_t)0x2901));
-  rxDesc->setValue("Relay Control Commands");
-  pRxCharacteristic->addDescriptor(rxDesc);
+  pLastConnectTimeCharacteristic = pService->createCharacteristic(DEVICE_LAST_CONNECT_UUID, BLECharacteristic::PROPERTY_READ);
+  BLEDescriptor* pLastConnectTimeCharacteristicDesc = new BLEDescriptor(BLEUUID((uint16_t)0x2901));
+  pLastConnectTimeCharacteristicDesc->setValue("Last Connection Time");
+  pLastConnectTimeCharacteristic->addDescriptor(pLastConnectTimeCharacteristicDesc);
 
-  char dt[32];
-  formatUtcDatetime(dt, sizeof(dt));
-  char msg[128];
-  snprintf(msg, sizeof(msg), "Successfully connected to ESP32-S3-POE-ETH-8DI-8RO on %s", dt);
-  pTxCharacteristic->setValue((uint8_t*)msg, strlen(msg));
+  pRelayControlCharacteristic = pService->createCharacteristic(RELAY_STATE_SET_CHARACTERISTIC_UUID, BLECharacteristic::PROPERTY_WRITE);
+  pRelayControlCharacteristic->setCallbacks(new MyRXCallback());
+  BLEDescriptor* pRelayControlDesc = new BLEDescriptor(BLEUUID((uint16_t)0x2901));
+  pRelayControlDesc->setValue("Relay Control Commands");
+  pRelayControlCharacteristic->addDescriptor(pRelayControlDesc);
 
   pService->start();   
 
