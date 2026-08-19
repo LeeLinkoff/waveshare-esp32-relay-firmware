@@ -1,5 +1,7 @@
 # ESP32 BLE Time-Based Authentication – Proof of Concept (Waveshare Platform)
 
+Built by  [Lee Linkoff](https://leelinkoff.com), a Principal Software Engineer focused on platform architecture and distributed systems
+
 ## 📘 Read This First
 
 This repository is **not** a production firmware.
